@@ -79,7 +79,18 @@ Without a URL allowlist, a fake request token can cause requests to any reachabl
 On SSE and streamable-http transports, callers can select a Grafana instance for each request. This is disabled by default.
 
 - `--allow-grafana-url-override`: Enable selection through `X-Grafana-URL`. Falls back to `GRAFANA_ALLOW_URL_OVERRIDE` when the flag is not set.
-- `--allowed-grafana-urls`: Optional comma-separated list of exact Grafana base URLs that callers may select. Falls back to `GRAFANA_ALLOWED_URLS` when the flag is not set. It requires the enable switch; an explicitly empty flag clears an inherited list.
+- `--allowed-grafana-urls`: Optional comma-separated list of Grafana base URLs that callers may select. Falls back to `GRAFANA_ALLOWED_URLS` when the flag is not set. It requires the enable switch; an explicitly empty flag clears an inherited list.
+
+Allowlist entries match the scheme, host, port, and path exactly. To allow a family of instances, replace the leftmost host label with `*`. For example, `https://*.grafana.example.com` matches `https://eu.grafana.example.com` but not `https://grafana.example.com` or `https://a.eu.grafana.example.com`: the wildcard matches exactly one DNS label. The wildcard must be followed by at least two labels, and the last one can't be all digits, so `https://*.com` and `https://*.10.0.0` are rejected. Wildcards also aren't allowed directly on a public suffix, such as `https://*.co.uk` or `https://*.github.io`. They also aren't allowed on or under the following shared hosting domains, because a single wildcard would match other customers' instances:
+
+- `grafana.net` (Grafana Cloud)
+- `grafana-dev.net` and `grafana-ops.net` (Grafana Labs)
+- `grafana.azure.com` (Azure Managed Grafana)
+- `grafana.aliyuncs.com` (Alibaba Cloud Managed Service for Grafana)
+- `amazonaws.com` (Amazon Managed Grafana and other AWS hostnames)
+- `aivencloud.com` (Aiven for Grafana and other Aiven services)
+
+List instances on these domains exactly. This list can't cover every hosting provider, so only use wildcards on domains you control.
 
 For a large fleet selected by a proxy, `GRAFANA_ALLOW_URL_OVERRIDE=true` enables selection without listing every instance in `GRAFANA_ALLOWED_URLS`. The deployment controls in the warning above still apply. The proxy must send both `X-Grafana-URL: <target base URL>` and `X-Grafana-Service-Account-Token: <token for that target>` on each MCP request. The deprecated `X-Grafana-API-Key` header also works. The server uses the token from that request and does not send its environment Grafana credentials to a selected target. If caller authentication is configured, the `Authorization` header carries the separate MCP caller token.
 

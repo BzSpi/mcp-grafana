@@ -313,7 +313,7 @@ func (dt *disabledTools) addFlags() {
 func (gc *grafanaConfig) addFlags() {
 	flag.BoolVar(&gc.debug, "debug", false, "Enable debug mode for the Grafana transport")
 	flag.BoolVar(&gc.allowURLOverride, "allow-grafana-url-override", false, "Enable X-Grafana-URL selection for HTTP/SSE requests. Falls back to GRAFANA_ALLOW_URL_OVERRIDE. Without --allowed-grafana-urls, callers may target any HTTP(S) URL reachable by this server.")
-	flag.StringVar(&gc.allowedURLs, "allowed-grafana-urls", "", "Optional comma-separated exact Grafana base URLs allowed when --allow-grafana-url-override is enabled. Falls back to GRAFANA_ALLOWED_URLS.")
+	flag.StringVar(&gc.allowedURLs, "allowed-grafana-urls", "", "Optional comma-separated Grafana base URLs allowed when --allow-grafana-url-override is enabled. A leading *. host label matches exactly one DNS label (e.g. https://*.grafana.example.com); not allowed on public suffixes or shared hosting domains such as grafana.net. Falls back to GRAFANA_ALLOWED_URLS.")
 
 	// TLS configuration flags
 	flag.StringVar(&gc.tlsCertFile, "tls-cert-file", "", "Path to TLS certificate file for client authentication")
