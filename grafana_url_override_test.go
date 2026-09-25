@@ -62,6 +62,51 @@ func TestGrafanaURLOverrideMiddleware(t *testing.T) {
 	}
 }
 
+func TestGrafanaURLOverrideWildcardAllowlist(t *testing.T) {
+	allowed, err := ParseGrafanaURLOverrides("https://*.example.com, https://*.grafana.example.com:8443/team", nil)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		target string
+		want   int
+	}{
+		{"https://foo.example.com", http.StatusNoContent},
+		{"https://FOO.Example.com/", http.StatusNoContent},
+		{"https://foo-1.example.com", http.StatusNoContent},
+		{"https://a.grafana.example.com:8443/team", http.StatusNoContent},
+		// A wildcard covers exactly one label.
+		{"https://example.com", http.StatusForbidden},
+		{"https://foo.bar.example.com", http.StatusForbidden},
+		{"https://foo.bar.grafana.example.com", http.StatusForbidden},
+		{"https://foo.bar.grafana.example.com:8443/team", http.StatusForbidden},
+		{"https://grafana.example.com:8443/team", http.StatusForbidden},
+		// Scheme, port, and path still match exactly.
+		{"http://foo.example.com", http.StatusForbidden},
+		{"https://foo.example.com:8443", http.StatusForbidden},
+		{"https://foo.example.com/team", http.StatusForbidden},
+		{"https://a.grafana.example.com/team", http.StatusForbidden},
+		{"https://a.grafana.example.com:8443", http.StatusForbidden},
+		{"https://a.grafana.example.com:8443/team/sub", http.StatusForbidden},
+		// Lookalike and malformed hosts.
+		{"https://fooexample.com", http.StatusForbidden},
+		{"https://foo.example.com.evil.com", http.StatusForbidden},
+		{"https://foo.example.com.", http.StatusForbidden},
+		{"https://-foo.example.com", http.StatusForbidden},
+		{"https://foo_bar.example.com", http.StatusForbidden},
+		{"https://*.example.com", http.StatusBadRequest},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req.Header.Set(grafanaURLHeader, tc.target)
+			req.Header.Set(grafanaServiceAccountTokenHeader, "request-token")
+			w := httptest.NewRecorder()
+			GrafanaURLOverrideMiddleware(true, allowed, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})).ServeHTTP(w, req)
+			assert.Equal(t, tc.want, w.Code)
+		})
+	}
+}
+
 func TestGrafanaURLOverrideIsolatesConfiguredCredentials(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer request-token", r.Header.Get("Authorization"))
@@ -172,11 +217,22 @@ func TestGrafanaURLOverrideBlocksRedirects(t *testing.T) {
 }
 
 func TestParseGrafanaURLOverrides(t *testing.T) {
-	allowed, err := ParseGrafanaURLOverrides("https://one.example.com, https://two.example.com/grafana/")
+	allowed, err := ParseGrafanaURLOverrides("https://one.example.com, https://two.example.com/grafana/", nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"https://one.example.com", "https://two.example.com/grafana"}, allowed)
-	for _, input := range []string{"*", "http://user:password@host", "https://host/path?x=y", "https://host/#fragment", "file:///etc/passwd", "https://host,", "https://host/grafana/../admin", "https://host/grafana/%2e%2e/admin"} {
-		_, err := ParseGrafanaURLOverrides(input)
+	allowed, err = ParseGrafanaURLOverrides("https://*.example.com/, https://*.grafana.example.com:8443/team", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://*.example.com", "https://*.grafana.example.com:8443/team"}, allowed)
+	// Only wildcards are refused under shared hosting domains and public
+	// suffixes; exact instances, lookalike domains, and registrable domains
+	// under a public suffix remain valid.
+	_, err = ParseGrafanaURLOverrides("https://mystack.grafana.net, https://g-abcdef0123.grafana-workspace.us-east-1.amazonaws.com, https://*.notgrafana.net, https://*.grafana.net.example.com, https://*.notamazonaws.com, https://*.example.co.uk, https://*.myorg.github.io", nil)
+	require.NoError(t, err)
+	for _, input := range []string{"*", "https://*", "https://*.com", "https://*.*.example.com", "https://foo.*.example.com", "https://f*.example.com", "https://*example.com", "https://*.1.2.3", "https://*.1.2.3.4", "https://*.example.com/../admin", "https://*.example.com?x=y", "https://*.-bad.com", "https://*.grafana.net", "https://*.GRAFANA.NET", "https://*.eu.grafana.net", "https://*.grafana.net:443/team",
+		"https://*.grafana-dev.net", "https://*.grafana-ops.net", "https://*.wcus.grafana.azure.com", "https://*.grafana.aliyuncs.com",
+		"https://*.grafana-workspace.us-east-1.amazonaws.com", "https://*.elb.amazonaws.com", "https://*.aivencloud.com",
+		"https://*.co.uk", "https://*.com.au", "https://*.github.io", "http://user:password@host", "https://host/path?x=y", "https://host/#fragment", "file:///etc/passwd", "https://host,", "https://host/grafana/../admin", "https://host/grafana/%2e%2e/admin"} {
+		_, err := ParseGrafanaURLOverrides(input, nil)
 		assert.Error(t, err, input)
 	}
 	// Direct requests cannot escape an allowed Grafana subpath.
@@ -204,6 +260,28 @@ func TestParseGrafanaURLOverrides(t *testing.T) {
 	rootTransport := &grafanaTargetTransport{baseURL: "https://example.com", next: transport.next}
 	req = httptest.NewRequest(http.MethodGet, "https://example.com/api/items/100%25", nil)
 	_, err = rootTransport.RoundTrip(req)
+	require.NoError(t, err)
+}
+
+func TestGrafanaURLWildcardDeniedDomains(t *testing.T) {
+	denied, err := ParseGrafanaURLWildcardDeniedDomains(" Corp.Example.com , hosted.example.org")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"corp.example.com", "hosted.example.org"}, denied)
+	empty, err := ParseGrafanaURLWildcardDeniedDomains(" ")
+	require.NoError(t, err)
+	assert.Nil(t, empty)
+	for _, input := range []string{"*.example.com", ".example.com", "https://example.com", "example.com:443", "example.com/path", "example.com,", "exa mple.com"} {
+		_, err := ParseGrafanaURLWildcardDeniedDomains(input)
+		assert.Error(t, err, input)
+	}
+
+	// Extra entries add to the built-in list rather than replacing it.
+	for _, input := range []string{"https://*.corp.example.com", "https://*.CORP.example.com", "https://*.eu.corp.example.com", "https://*.hosted.example.org", "https://*.grafana.net"} {
+		_, err := ParseGrafanaURLOverrides(input, denied)
+		assert.ErrorContains(t, err, "not allowed under the denied domain", input)
+	}
+	// Exact entries and wildcards outside the denied domains remain valid.
+	_, err = ParseGrafanaURLOverrides("https://team.corp.example.com, https://*.example.com, https://*.notcorp.example.com", denied)
 	require.NoError(t, err)
 }
 

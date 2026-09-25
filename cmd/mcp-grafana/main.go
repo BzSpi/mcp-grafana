@@ -225,8 +225,9 @@ type grafanaConfig struct {
 	debug bool
 
 	// Request-selected Grafana targets for HTTP transports.
-	allowURLOverride bool
-	allowedURLs      string
+	allowURLOverride         bool
+	allowedURLs              string
+	deniedURLWildcardDomains string
 
 	// TLS configuration
 	tlsCertFile   string
@@ -313,7 +314,8 @@ func (dt *disabledTools) addFlags() {
 func (gc *grafanaConfig) addFlags() {
 	flag.BoolVar(&gc.debug, "debug", false, "Enable debug mode for the Grafana transport")
 	flag.BoolVar(&gc.allowURLOverride, "allow-grafana-url-override", false, "Enable X-Grafana-URL selection for HTTP/SSE requests. Falls back to GRAFANA_ALLOW_URL_OVERRIDE. Without --allowed-grafana-urls, callers may target any HTTP(S) URL reachable by this server.")
-	flag.StringVar(&gc.allowedURLs, "allowed-grafana-urls", "", "Optional comma-separated exact Grafana base URLs allowed when --allow-grafana-url-override is enabled. Falls back to GRAFANA_ALLOWED_URLS.")
+	flag.StringVar(&gc.allowedURLs, "allowed-grafana-urls", "", "Optional comma-separated Grafana base URLs allowed when --allow-grafana-url-override is enabled. A leading *. host label matches exactly one DNS label (e.g. https://*.grafana.example.com); not allowed on public suffixes or shared hosting domains such as grafana.net. Falls back to GRAFANA_ALLOWED_URLS.")
+	flag.StringVar(&gc.deniedURLWildcardDomains, "denied-grafana-url-wildcard-domains", "", "Optional comma-separated domains, added to the built-in shared hosting domains (grafana.net, amazonaws.com, ...), on or under which --allowed-grafana-urls wildcards are refused. Falls back to GRAFANA_DENIED_URL_WILDCARD_DOMAINS.")
 
 	// TLS configuration flags
 	flag.StringVar(&gc.tlsCertFile, "tls-cert-file", "", "Path to TLS certificate file for client authentication")
@@ -355,6 +357,9 @@ func (gc *grafanaConfig) applyGrafanaURLOverrideEnv(setFlags map[string]bool) er
 	}
 	if !setFlags["allowed-grafana-urls"] {
 		gc.allowedURLs = os.Getenv("GRAFANA_ALLOWED_URLS")
+	}
+	if !setFlags["denied-grafana-url-wildcard-domains"] {
+		gc.deniedURLWildcardDomains = os.Getenv("GRAFANA_DENIED_URL_WILDCARD_DOMAINS")
 	}
 	return nil
 }
@@ -1441,7 +1446,16 @@ func main() {
 		Timeout:                 gc.timeout,
 		SOCKS5ProxyURL:          socks5Proxy,
 	}
-	grafanaConfig.AllowedGrafanaURLs, err = mcpgrafana.ParseGrafanaURLOverrides(gc.allowedURLs)
+	deniedWildcardDomains, err := mcpgrafana.ParseGrafanaURLWildcardDeniedDomains(gc.deniedURLWildcardDomains)
+	if err != nil {
+		source := "--denied-grafana-url-wildcard-domains"
+		if !setFlags["denied-grafana-url-wildcard-domains"] {
+			source = "GRAFANA_DENIED_URL_WILDCARD_DOMAINS"
+		}
+		fmt.Fprintf(os.Stderr, "invalid %s: %v\n", source, err)
+		os.Exit(2)
+	}
+	grafanaConfig.AllowedGrafanaURLs, err = mcpgrafana.ParseGrafanaURLOverrides(gc.allowedURLs, deniedWildcardDomains)
 	if err != nil {
 		source := "--allowed-grafana-urls"
 		if !setFlags["allowed-grafana-urls"] {
