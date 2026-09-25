@@ -16,8 +16,10 @@ type grafanaOverrideKey struct{}
 // Entries match exactly, except that an entry whose host starts with "*."
 // (for example https://*.grafana.example.com) matches any single DNS label in
 // that position; scheme, port, and path must still match exactly.
+// Wildcards are refused on or under the built-in shared hosting domains and
+// any extraDeniedDomains (see ParseGrafanaURLWildcardDeniedDomains).
 // An empty list leaves targets unrestricted when overrides are enabled.
-func ParseGrafanaURLOverrides(raw string) ([]string, error) {
+func ParseGrafanaURLOverrides(raw string, extraDeniedDomains []string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
@@ -25,7 +27,7 @@ func ParseGrafanaURLOverrides(raw string) ([]string, error) {
 	allowed := make([]string, 0, len(parts))
 	for _, part := range parts {
 		candidate := strings.TrimRight(strings.TrimSpace(part), "/")
-		if err := validateOverrideAllowlistEntry(candidate); err != nil {
+		if err := validateOverrideAllowlistEntry(candidate, extraDeniedDomains); err != nil {
 			return nil, fmt.Errorf("invalid Grafana URL override allowlist entry: %w", err)
 		}
 		allowed = append(allowed, candidate)
@@ -52,18 +54,39 @@ var sharedHostingDomains = []string{
 	"aivencloud.com",       // Aiven for Grafana and other Aiven services
 }
 
-// sharedHostingDomain returns the entry of sharedHostingDomains that host is
-// equal to or under, or "" if there is none. host must be lower case.
-func sharedHostingDomain(host string) string {
-	for _, d := range sharedHostingDomains {
-		if host == d || strings.HasSuffix(host, "."+d) {
-			return d
+// ParseGrafanaURLWildcardDeniedDomains validates a comma-separated list of
+// domains, added to the built-in shared hosting domains, on or under which
+// allowlist wildcards are refused. Entries are returned in lower case.
+func ParseGrafanaURLWildcardDeniedDomains(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	denied := make([]string, 0, len(parts))
+	for _, part := range parts {
+		domain := strings.ToLower(strings.TrimSpace(part))
+		if !isDNSName(domain) {
+			return nil, fmt.Errorf("invalid wildcard denied domain %q: must be a domain name such as example.com, without scheme, port, or wildcard", domain)
+		}
+		denied = append(denied, domain)
+	}
+	return denied, nil
+}
+
+// sharedHostingDomain returns the entry of sharedHostingDomains or extra that
+// host is equal to or under, or "" if there is none. host must be lower case.
+func sharedHostingDomain(host string, extra []string) string {
+	for _, list := range [][]string{sharedHostingDomains, extra} {
+		for _, d := range list {
+			if host == d || strings.HasSuffix(host, "."+d) {
+				return d
+			}
 		}
 	}
 	return ""
 }
 
-func validateOverrideAllowlistEntry(raw string) error {
+func validateOverrideAllowlistEntry(raw string, extraDeniedDomains []string) error {
 	u, err := url.Parse(raw)
 	if err == nil && strings.HasPrefix(u.Host, wildcardHostPrefix) {
 		suffix := strings.TrimPrefix(u.Hostname(), wildcardHostPrefix)
@@ -74,8 +97,8 @@ func validateOverrideAllowlistEntry(raw string) error {
 			return fmt.Errorf("wildcard entry must be *.<domain> with at least two domain labels and a non-numeric top-level label")
 		}
 		lower := strings.ToLower(suffix)
-		if d := sharedHostingDomain(lower); d != "" {
-			return fmt.Errorf("wildcard entries are not allowed under the shared hosting domain %s; list each instance URL exactly", d)
+		if d := sharedHostingDomain(lower, extraDeniedDomains); d != "" {
+			return fmt.Errorf("wildcard entries are not allowed under the denied domain %s; list each instance URL exactly", d)
 		}
 		// A wildcard directly on a public suffix (co.uk, github.io, ...) would
 		// match every registrant under it.

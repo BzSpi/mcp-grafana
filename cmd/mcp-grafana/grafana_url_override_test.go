@@ -35,19 +35,23 @@ func TestValidateGrafanaURLOverridePolicy(t *testing.T) {
 func TestGrafanaURLOverrideFlagPrecedence(t *testing.T) {
 	t.Setenv("GRAFANA_ALLOW_URL_OVERRIDE", "true")
 	t.Setenv("GRAFANA_ALLOWED_URLS", "https://grafana.example.com")
+	t.Setenv("GRAFANA_DENIED_URL_WILDCARD_DOMAINS", "corp.example.com")
 
 	fromEnv := grafanaConfig{}
 	assert.NoError(t, fromEnv.applyGrafanaURLOverrideEnv(nil))
 	assert.True(t, fromEnv.allowURLOverride)
 	assert.Equal(t, "https://grafana.example.com", fromEnv.allowedURLs)
+	assert.Equal(t, "corp.example.com", fromEnv.deniedURLWildcardDomains)
 
 	fromFlags := grafanaConfig{allowURLOverride: false, allowedURLs: ""}
 	assert.NoError(t, fromFlags.applyGrafanaURLOverrideEnv(map[string]bool{
-		"allow-grafana-url-override": true,
-		"allowed-grafana-urls":       true,
+		"allow-grafana-url-override":          true,
+		"allowed-grafana-urls":                true,
+		"denied-grafana-url-wildcard-domains": true,
 	}))
 	assert.False(t, fromFlags.allowURLOverride)
 	assert.Empty(t, fromFlags.allowedURLs)
+	assert.Empty(t, fromFlags.deniedURLWildcardDomains)
 }
 
 func TestGrafanaURLOverrideInvalidEnv(t *testing.T) {
